@@ -52,6 +52,7 @@ services:
     ports: ["8000:8000"]
     environment:
       <<: *QUICKSTART_ENVIRONMENT
+    restart: unless-stopped
   ruby:
     networks:
       - "quickstart"
@@ -72,6 +73,7 @@ services:
       context: .
       dockerfile: ./frontend/Dockerfile
     ports: ["3453:3000"]
+    restart: unless-stopped
 networks:
   quickstart:
     name: quickstart
