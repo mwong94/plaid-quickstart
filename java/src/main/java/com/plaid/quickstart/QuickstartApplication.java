@@ -6,6 +6,7 @@ import java.util.HashMap;
 import com.fasterxml.jackson.databind.PropertyNamingStrategy;
 import com.plaid.quickstart.resources.AccessTokenResource;
 import com.plaid.quickstart.resources.AccountsResource;
+import com.plaid.quickstart.resources.AssetsResource;
 import com.plaid.quickstart.resources.AuthResource;
 import com.plaid.quickstart.resources.BalanceResource;
 import com.plaid.quickstart.resources.HoldingsResource;
@@ -17,6 +18,8 @@ import com.plaid.quickstart.resources.LinkTokenResource;
 import com.plaid.quickstart.resources.LinkTokenWithPaymentResource;
 import com.plaid.quickstart.resources.PaymentInitiationResource;
 import com.plaid.quickstart.resources.PublicTokenResource;
+import com.plaid.quickstart.resources.SignalResource;
+import com.plaid.quickstart.resources.StatementsResource;
 import com.plaid.quickstart.resources.TransactionsResource;
 import com.plaid.quickstart.resources.TransferAuthorizeResource;
 import com.plaid.quickstart.resources.TransferCreateResource;
@@ -74,9 +77,6 @@ public class QuickstartApplication extends Application<QuickstartConfiguration> 
       case "sandbox":
         plaidEnv = ApiClient.Sandbox;
         break;
-      case "development":
-        plaidEnv = ApiClient.Development;
-        break;
       case "production":
         plaidEnv = ApiClient.Production;
         break;
@@ -103,6 +103,7 @@ public class QuickstartApplication extends Application<QuickstartConfiguration> 
 
     environment.jersey().register(new AccessTokenResource(plaidClient, plaidProducts));
     environment.jersey().register(new AccountsResource(plaidClient));
+    environment.jersey().register(new AssetsResource(plaidClient));
     environment.jersey().register(new AuthResource(plaidClient));
     environment.jersey().register(new BalanceResource(plaidClient));
     environment.jersey().register(new HoldingsResource(plaidClient));
@@ -114,6 +115,8 @@ public class QuickstartApplication extends Application<QuickstartConfiguration> 
     environment.jersey().register(new LinkTokenWithPaymentResource(plaidClient, plaidProducts, countryCodes, redirectUri));
     environment.jersey().register(new PaymentInitiationResource(plaidClient));
     environment.jersey().register(new PublicTokenResource(plaidClient));
+    environment.jersey().register(new SignalResource(plaidClient));
+    environment.jersey().register(new StatementsResource(plaidClient));
     environment.jersey().register(new TransactionsResource(plaidClient));
     environment.jersey().register(new TransferAuthorizeResource(plaidClient));
     environment.jersey().register(new TransferCreateResource(plaidClient));

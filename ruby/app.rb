@@ -89,13 +89,23 @@ get '/api/transactions' do
         }
       )
       response = client.transactions_sync(request)
+      cursor = response.next_cursor
+
+      # If no transactions are available yet, wait and poll the endpoint.
+      # Normally, we would listen for a webhook but the Quickstart doesn't 
+      # support webhooks. For a webhook example, see 
+      # https://github.com/plaid/tutorial-resources or
+      # https://github.com/plaid/pattern
+      if cursor == ""
+        sleep 2 
+        next 
+      end
+    
       # Add this page of results
       added += response.added
       modified += response.modified
       removed += response.removed
       has_more = response.has_more
-      # Update cursor to the next cursor
-      cursor = response.next_cursor
       pretty_print_response(response.to_hash)
     end
     # Return the 8 most recent transactions
@@ -297,6 +307,31 @@ get '/api/assets' do
     pdf: Base64.encode64(File.read(asset_report_pdf)) }.to_json
 end
 
+get '/api/statements' do
+  begin
+    statements_list_request = Plaid::StatementsListRequest.new(
+      {
+        access_token: access_token
+      }
+    )
+    statements_list_response =
+      client.statements_list(statements_list_request)
+    pretty_print_response(statements_list_response.to_hash)
+  rescue Plaid::ApiError => e
+    error_response = format_error(e)
+    pretty_print_response(error_response)
+    content_type :json
+    error_response.to_json
+  end
+  statement_id = statements_list_response.accounts[0].statements[0].statement_id
+  statements_download_request = Plaid::StatementsDownloadRequest.new({ access_token: access_token, statement_id: statement_id })
+  statement_pdf = client.statements_download(statements_download_request)
+
+  content_type :json
+  { json: statements_list_response.to_hash,
+    pdf: Base64.encode64(File.read(statement_pdf)) }.to_json
+end
+
 # rubocop:enable Metrics/BlockLength
 
 # Retrieve high-level information about an Item
@@ -370,6 +405,33 @@ get '/api/transfer_authorize' do
   end
 end
 
+get '/api/signal_evaluate' do
+  begin
+    # We call /accounts/get to obtain first account_id - in production,
+    # account_id's should be persisted in a data store and retrieved
+    # from there.
+    accounts_get_request = Plaid::AccountsGetRequest.new({ access_token: access_token })
+    accounts_get_response = client.accounts_get(accounts_get_request)
+    account_id = accounts_get_response.accounts[0].account_id
+
+    signal_evaluate_request = Plaid::SignalEvaluateRequest.new({
+      access_token: access_token,
+      account_id: account_id,
+      client_transaction_id: 'tx1234',
+      amount: 100.00
+    })
+    signal_evaluate_response = client.signal_evaluate(signal_evaluate_request)
+    pretty_print_response(signal_evaluate_response.to_hash)
+    content_type :json
+    signal_evaluate_response.to_hash.to_json
+  rescue Plaid::ApiError => e
+    error_response = format_error(e)
+    pretty_print_response(error_response)
+    content_type :json
+    error_response.to_json
+  end
+end
+
 get '/api/transfer_create' do
   begin
       transfer_create_request = Plaid::TransferCreateRequest.new({
@@ -419,6 +481,14 @@ post '/api/create_link_token' do
         redirect_uri: nil_if_empty_envvar('PLAID_REDIRECT_URI')
       }
     )
+    if ENV['PLAID_PRODUCTS'].split(',').include?("statements")
+      today = Date.today
+      statements = Plaid::LinkTokenCreateRequestStatements.new(
+        end_date: today,
+        start_date: today-30
+      )
+      link_token_create_request.statements=statements
+    end
     link_response = client.link_token_create(link_token_create_request)
     pretty_print_response(link_response.to_hash)
     content_type :json

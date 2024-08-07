@@ -15,6 +15,8 @@ const PLAID_CLIENT_ID = process.env.PLAID_CLIENT_ID;
 const PLAID_SECRET = process.env.PLAID_SECRET;
 const PLAID_ENV = process.env.PLAID_ENV || 'sandbox';
 
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 // PLAID_PRODUCTS is a comma-separated list of products to use when initializing
 // Link. Note that this list must contain 'assets' in order for the app to be
 // able to create and retrieve asset reports.
@@ -112,6 +114,13 @@ app.post('/api/create_link_token', function (request, response, next) {
 
       if (PLAID_ANDROID_PACKAGE_NAME !== '') {
         configs.android_package_name = PLAID_ANDROID_PACKAGE_NAME;
+      }
+      if (PLAID_PRODUCTS.includes(Products.Statements)) {
+        const statementConfig = {
+          end_date: moment().format('YYYY-MM-DD'),
+          start_date: moment().subtract(30, 'days').format('YYYY-MM-DD'),
+        }
+        configs.statements = statementConfig;
       }
       const createTokenResponse = await client.linkTokenCreate(configs);
       prettyPrintResponse(createTokenResponse);
@@ -247,13 +256,24 @@ app.get('/api/transactions', function (request, response, next) {
         };
         const response = await client.transactionsSync(request)
         const data = response.data;
+
+        // If no transactions are available yet, wait and poll the endpoint.
+        // Normally, we would listen for a webhook, but the Quickstart doesn't
+        // support webhooks. For a webhook example, see
+        // https://github.com/plaid/tutorial-resources or
+        // https://github.com/plaid/pattern
+        cursor = data.next_cursor;
+        if (cursor === "") {
+          await sleep(2000);
+          continue; 
+      }
+  
         // Add this page of results
         added = added.concat(data.added);
         modified = modified.concat(data.modified);
         removed = removed.concat(data.removed);
         hasMore = data.has_more;
-        // Update cursor to the next cursor
-        cursor = data.next_cursor;
+        
         prettyPrintResponse(response);
       }
 
@@ -440,6 +460,28 @@ app.get('/api/assets', function (request, response, next) {
     .catch(next);
 });
 
+app.get('/api/statements', function (request, response, next) {
+  Promise.resolve()
+    .then(async function () {
+      const statementsListResponse = await client.statementsList({access_token: ACCESS_TOKEN});
+      prettyPrintResponse(statementsListResponse);
+      const pdfRequest = {
+        access_token: ACCESS_TOKEN,
+        statement_id: statementsListResponse.data.accounts[0].statements[0].statement_id  
+      };
+
+      const statementsDownloadResponse = await client.statementsDownload(pdfRequest, {
+        responseType: 'arraybuffer',
+      });
+      prettyPrintResponse(statementsDownloadResponse);
+      response.json({
+        json: statementsListResponse.data,
+        pdf: statementsDownloadResponse.data.toString('base64'),
+      });
+    })
+    .catch(next);
+});
+
 // This functionality is only relevant for the UK/EU Payment Initiation product.
 // Retrieve Payment for a specified Payment ID
 app.get('/api/payment', function (request, response, next) {
@@ -469,6 +511,7 @@ app.get('/api/income/verification/paystubs', function (request, response, next) 
 })
 
 app.use('/api', function (error, request, response, next) {
+  console.log(error);
   prettyPrintResponse(error.response);
   response.json(formatError(error.response));
 });
@@ -572,6 +615,26 @@ app.get('/api/transfer_create', function (request, response, next) {
         error: null,
         transfer: transferCreateResponse.data.transfer,
       });
+    })
+    .catch(next);
+});
+
+app.get('/api/signal_evaluate', function (request, response, next) {
+  Promise.resolve()
+    .then(async function () {
+      const accountsResponse = await client.accountsGet({
+        access_token: ACCESS_TOKEN,
+      });
+      ACCOUNT_ID = accountsResponse.data.accounts[0].account_id;
+
+      const signalEvaluateResponse = await client.signalEvaluate({
+        access_token: ACCESS_TOKEN,
+        account_id: ACCOUNT_ID,
+        client_transaction_id: 'txn1234',
+        amount: 100.00,
+      });
+      prettyPrintResponse(signalEvaluateResponse);
+      response.json(signalEvaluateResponse.data);
     })
     .catch(next);
 });

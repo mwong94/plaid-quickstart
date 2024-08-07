@@ -16,7 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
-	plaid "github.com/plaid/plaid-go/v18/plaid"
+	plaid "github.com/plaid/plaid-go/v21/plaid"
 )
 
 var (
@@ -32,7 +32,6 @@ var (
 
 var environments = map[string]plaid.Environment{
 	"sandbox":     plaid.Sandbox,
-	"development": plaid.Development,
 	"production":  plaid.Production,
 }
 
@@ -115,6 +114,8 @@ func main() {
 	r.GET("/api/assets", assets)
 	r.GET("/api/transfer_authorize", transferAuthorize)
 	r.GET("/api/transfer_create", transferCreate)
+	r.GET("/api/signal_evaluate", signalEvaluate)
+	r.GET("/api/statements", statements)
 
 	err := r.Run(":" + APP_PORT)
 	if err != nil {
@@ -214,8 +215,8 @@ func createLinkTokenForPayment(c *gin.Context) {
 	fmt.Println("payment id: " + paymentID)
 
 	// Create the link_token
-	linkTokenCreateReqPaymentInitiation := plaid.NewLinkTokenCreateRequestPaymentInitiation();
-	linkTokenCreateReqPaymentInitiation.SetPaymentId(paymentID);
+	linkTokenCreateReqPaymentInitiation := plaid.NewLinkTokenCreateRequestPaymentInitiation()
+	linkTokenCreateReqPaymentInitiation.SetPaymentId(paymentID)
 	linkToken, err := linkTokenCreate(linkTokenCreateReqPaymentInitiation)
 	if err != nil {
 		renderError(c, err)
@@ -349,14 +350,26 @@ func transactions(c *gin.Context) {
 			return
 		}
 
+		// Update cursor to the next cursor
+		nextCursor := resp.GetNextCursor()
+		cursor = &nextCursor
+
+		// If no transactions are available yet, wait and poll the endpoint.
+		// Normally, we would listen for a webhook, but the Quickstart doesn't
+		// support webhooks. For a webhook example, see
+		// https://github.com/plaid/tutorial-resources or
+		// https://github.com/plaid/pattern
+
+		if *cursor == "" {
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
 		// Add this page of results
 		added = append(added, resp.GetAdded()...)
 		modified = append(modified, resp.GetModified()...)
 		removed = append(removed, resp.GetRemoved()...)
 		hasMore = resp.GetHasMore()
-		// Update cursor to the next cursor
-		nextCursor := resp.GetNextCursor()
-		cursor = &nextCursor
 	}
 
 	sort.Slice(added, func(i, j int) bool {
@@ -416,7 +429,7 @@ func transferAuthorize(c *gin.Context) {
 		"1.00",
 		*transferAuthorizationCreateUser)
 
-	transferAuthorizationCreateRequest.SetAchClass(*ACHClass);
+	transferAuthorizationCreateRequest.SetAchClass(*ACHClass)
 	transferAuthorizationCreateResp, _, err := client.PlaidApi.TransferAuthorizationCreate(ctx).TransferAuthorizationCreateRequest(*transferAuthorizationCreateRequest).Execute()
 
 	if err != nil {
@@ -447,6 +460,35 @@ func transferCreate(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, transferCreateResp)
+}
+
+func signalEvaluate(c *gin.Context) {
+	ctx := context.Background()
+	accountsGetResp, _, err := client.PlaidApi.AccountsGet(ctx).AccountsGetRequest(
+		*plaid.NewAccountsGetRequest(accessToken),
+	).Execute()
+
+	if err != nil {
+		renderError(c, err)
+		return
+	}
+
+	accountID = accountsGetResp.GetAccounts()[0].AccountId
+
+	signalEvaluateRequest := plaid.NewSignalEvaluateRequest(
+		accessToken,
+		accountID,
+		"txn1234",
+		100.00)
+
+	signalEvaluateResp, _, err := client.PlaidApi.SignalEvaluate(ctx).SignalEvaluateRequest(*signalEvaluateRequest).Execute()
+
+	if err != nil {
+		renderError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, signalEvaluateResp)
 }
 
 func investmentTransactions(c *gin.Context) {
@@ -540,6 +582,15 @@ func convertProducts(productStrs []string) []plaid.Products {
 	return products
 }
 
+func containsProduct(products []plaid.Products, product plaid.Products) bool {
+	for _, p := range products {
+		if p == product {
+			return true
+		}
+	}
+	return false
+}
+
 // linkTokenCreate creates a link token using the specified parameters
 func linkTokenCreate(
 	paymentInitiation *plaid.LinkTokenCreateRequestPaymentInitiation,
@@ -564,13 +615,20 @@ func linkTokenCreate(
 		user,
 	)
 
+	products := convertProducts(strings.Split(PLAID_PRODUCTS, ","))
 	if paymentInitiation != nil {
 		request.SetPaymentInitiation(*paymentInitiation)
 		// The 'payment_initiation' product has to be the only element in the 'products' list.
 		request.SetProducts([]plaid.Products{plaid.PRODUCTS_PAYMENT_INITIATION})
 	} else {
-		products := convertProducts(strings.Split(PLAID_PRODUCTS, ","))
 		request.SetProducts(products)
+	}
+
+	if containsProduct(products, plaid.PRODUCTS_STATEMENTS) {
+		statementConfig := plaid.NewLinkTokenCreateRequestStatements()
+		statementConfig.SetStartDate(time.Now().Local().Add(-30 * 24 * time.Hour).Format("2006-01-02"))
+		statementConfig.SetEndDate(time.Now().Local().Format("2006-01-02"))
+		request.SetStatements(*statementConfig)
 	}
 
 	if redirectURI != "" {
@@ -584,6 +642,37 @@ func linkTokenCreate(
 	}
 
 	return linkTokenCreateResp.GetLinkToken(), nil
+}
+
+func statements(c *gin.Context) {
+	ctx := context.Background()
+	statementsListResp, _, err := client.PlaidApi.StatementsList(ctx).StatementsListRequest(
+		*plaid.NewStatementsListRequest(accessToken),
+	).Execute()
+	statementId := statementsListResp.GetAccounts()[0].GetStatements()[0].StatementId
+
+	statementsDownloadResp, _, err := client.PlaidApi.StatementsDownload(ctx).StatementsDownloadRequest(
+		*plaid.NewStatementsDownloadRequest(accessToken, statementId),
+	).Execute()
+	if err != nil {
+		renderError(c, err)
+		return
+	}
+
+	reader := bufio.NewReader(statementsDownloadResp)
+	content, err := ioutil.ReadAll(reader)
+	if err != nil {
+		renderError(c, err)
+		return
+	}
+
+	// convert pdf to base64
+	encodedPdf := base64.StdEncoding.EncodeToString(content)
+
+	c.JSON(http.StatusOK, gin.H{
+		"json": statementsListResp,
+		"pdf":  encodedPdf,
+	})
 }
 
 func assets(c *gin.Context) {

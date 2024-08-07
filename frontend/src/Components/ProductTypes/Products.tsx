@@ -16,6 +16,8 @@ import {
   incomePaystubsCategories,
   transferCategories,
   transferAuthorizationCategories,
+  signalCategories,
+  statementsCategories,
   transformAuthData,
   transformTransactionsData,
   transformBalanceData,
@@ -28,6 +30,8 @@ import {
   transformTransferData,
   transformTransferAuthorizationData,
   transformIncomePaystubsData,
+  transformSignalData,
+  transformStatementsData
 } from "../../dataUtilities";
 
 const Products = () => {
@@ -80,7 +84,7 @@ const Products = () => {
           endpoint="assets"
           name="Assets"
           categories={assetsCategories}
-          schema="/assets_report/get/"
+          schema="/asset_report/get/"
           description="Create and retrieve assets information an asset report"
           transformData={transformAssetsData}
         />
@@ -142,11 +146,36 @@ const Products = () => {
             name="Transfer"
             categories={transferCategories}
             schema="/transfer/create/"
-            description="(After calling /transfer/authorization/create) Execute an authorized 1-dollar ACH transfer payment from the linked account"
+            description="(After calling /transfer/authorization/create) Execute an authorized 1-dollar ACH transfer payment from the first linked account"
             transformData={transformTransferData}
           />
         </>
       )}
+      {products.includes("signal") && (
+        <>
+        <Endpoint
+            endpoint="signal_evaluate"
+            name="Signal"
+            categories={signalCategories}
+            schema="/signal/evaluate"
+            description="Evaluate the return risk of a proposed $100 debit from the first linked account (in Sandbox, results are randomly generated)"
+            transformData={transformSignalData}
+          />
+        </>
+      )}
+      {products.includes("statements") && (
+        <>
+        <Endpoint
+            endpoint="statements"
+            name="Statements"
+            categories={statementsCategories}
+            schema="/statements/list and /statements/download"
+            description="List out and download the most recent statement"
+            transformData={transformStatementsData}
+          />
+        </>
+      )}
+
       {products.includes("income_verification") && (
         <Endpoint
           endpoint="/income/verification/paystubs"

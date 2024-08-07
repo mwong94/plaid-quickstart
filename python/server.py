@@ -1,10 +1,10 @@
-# source /Users/tnappy/node_projects/quickstart/python/bin/activate
 # Read env vars from .env file
 import base64
 import os
 import datetime as dt
 import json
 import time
+from datetime import date, timedelta
 
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
@@ -46,6 +46,10 @@ from plaid.model.transfer_authorization_user_in_request import TransferAuthoriza
 from plaid.model.ach_class import ACHClass
 from plaid.model.transfer_create_idempotency_key import TransferCreateIdempotencyKey
 from plaid.model.transfer_user_address_in_request import TransferUserAddressInRequest
+from plaid.model.signal_evaluate_request import SignalEvaluateRequest
+from plaid.model.statements_list_request import StatementsListRequest
+from plaid.model.link_token_create_request_statements import LinkTokenCreateRequestStatements
+from plaid.model.statements_download_request import StatementsDownloadRequest
 from plaid.api import plaid_api
 
 load_dotenv()
@@ -53,21 +57,10 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# Fill in your Plaid API keys - https://dashboard.plaid.com/account/keys
 PLAID_CLIENT_ID = os.getenv('PLAID_CLIENT_ID')
 PLAID_SECRET = os.getenv('PLAID_SECRET')
-# Use 'sandbox' to test with Plaid's Sandbox environment (username: user_good,
-# password: pass_good)
-# Use `development` to test with live users and credentials and `production`
-# to go live
 PLAID_ENV = os.getenv('PLAID_ENV', 'sandbox')
-# PLAID_PRODUCTS is a comma-separated list of products to use when initializing
-# Link. Note that this list must contain 'assets' in order for the app to be
-# able to create and retrieve asset reports.
 PLAID_PRODUCTS = os.getenv('PLAID_PRODUCTS', 'transactions').split(',')
-
-# PLAID_COUNTRY_CODES is a comma-separated list of countries for which users
-# will be able to select institutions from.
 PLAID_COUNTRY_CODES = os.getenv('PLAID_COUNTRY_CODES', 'US').split(',')
 
 
@@ -81,9 +74,6 @@ host = plaid.Environment.Sandbox
 
 if PLAID_ENV == 'sandbox':
     host = plaid.Environment.Sandbox
-
-if PLAID_ENV == 'development':
-    host = plaid.Environment.Development
 
 if PLAID_ENV == 'production':
     host = plaid.Environment.Production
@@ -216,10 +206,17 @@ def create_link_token():
         )
         if PLAID_REDIRECT_URI!=None:
             request['redirect_uri']=PLAID_REDIRECT_URI
+        if Products('statements') in products:
+            statements=LinkTokenCreateRequestStatements(
+                end_date=date.today(),
+                start_date=date.today()-timedelta(days=30)
+            )
+            request['statements']=statements
     # create link token
         response = client.link_token_create(request)
         return jsonify(response.to_dict())
     except plaid.ApiException as e:
+        print(e)
         return json.loads(e.body)
 
 
@@ -285,13 +282,21 @@ def get_transactions():
                 cursor=cursor,
             )
             response = client.transactions_sync(request).to_dict()
-            # Add this page of results
+            cursor = response['next_cursor']
+            # If no transactions are available yet, wait and poll the endpoint.
+            # Normally, we would listen for a webhook, but the Quickstart doesn't 
+            # support webhooks. For a webhook example, see 
+            # https://github.com/plaid/tutorial-resources or
+            # https://github.com/plaid/pattern
+            if cursor == '':
+                time.sleep(2)
+                continue  
+            # If cursor is not an empty string, we got results, 
+            # so add this page of results
             added.extend(response['added'])
             modified.extend(response['modified'])
             removed.extend(response['removed'])
             has_more = response['has_more']
-            # Update cursor to the next cursor
-            cursor = response['next_cursor']
             pretty_print_response(response)
 
         # Return the 8 most recent transactions
@@ -531,6 +536,53 @@ def transfer():
     except plaid.ApiException as e:
         error_response = format_error(e)
         return jsonify(error_response)
+
+@app.route('/api/statements', methods=['GET'])
+def statements():
+    try:
+        request = StatementsListRequest(access_token=access_token)
+        response = client.statements_list(request)
+        pretty_print_response(response.to_dict())
+    except plaid.ApiException as e:
+        error_response = format_error(e)
+        return jsonify(error_response)
+    try:
+        request = StatementsDownloadRequest(
+            access_token=access_token,
+            statement_id=response['accounts'][0]['statements'][0]['statement_id']
+        )
+        pdf = client.statements_download(request)
+        return jsonify({
+            'error': None,
+            'json': response.to_dict(),
+            'pdf': base64.b64encode(pdf.read()).decode('utf-8'),
+        })
+    except plaid.ApiException as e:
+        error_response = format_error(e)
+        return jsonify(error_response)
+
+
+
+
+@app.route('/api/signal_evaluate', methods=['GET'])
+def signal():
+    global account_id
+    request = AccountsGetRequest(access_token=access_token)
+    response = client.accounts_get(request)
+    account_id = response['accounts'][0]['account_id']
+    try:
+        request = SignalEvaluateRequest(
+            access_token=access_token,
+            account_id=account_id,
+            client_transaction_id='txn1234',
+            amount=100.00)
+        response = client.signal_evaluate(request)
+        pretty_print_response(response.to_dict())
+        return jsonify(response.to_dict())
+    except plaid.ApiException as e:
+        error_response = format_error(e)
+        return jsonify(error_response)
+
 
 # This functionality is only relevant for the UK Payment Initiation product.
 # Retrieve Payment for a specified Payment ID
