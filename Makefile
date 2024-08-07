@@ -12,6 +12,15 @@ up:
 	REACT_APP_API_HOST=http://$(language):8000 \
 	$(DOCKER_COMPOSE) \
 		$(DOCKER_COMPOSE_YML) \
+		$@ --detach --remove-orphans \
+		$(language)
+	@echo $(SUCCESS_MESSAGE)
+
+.PHONY: up-build
+up:
+	REACT_APP_API_HOST=http://$(language):8000 \
+	$(DOCKER_COMPOSE) \
+		$(DOCKER_COMPOSE_YML) \
 		$@ --build --detach --remove-orphans \
 		$(language)
 	@echo $(SUCCESS_MESSAGE)
